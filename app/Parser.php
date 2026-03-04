@@ -35,13 +35,22 @@ final class Parser
         $useIgbinary = function_exists('igbinary_serialize');
         $pids = [];
 
+        $total = $this->numSlugs * $this->numDates;
+
         for ($i = 1; $i < $childCount; $i++) {
             $pid = pcntl_fork();
             if ($pid === 0) {
                 $so = [];
                 $ss = [];
                 $counts = $this->processChunk($inputPath, $boundaries[$i][0], $boundaries[$i][1], $so, $ss);
-                $serialized = $useIgbinary ? igbinary_serialize($counts) : serialize($counts);
+                // Extract non-zero entries for compact serialization
+                $sparse = [];
+                for ($j = 0; $j < $total; $j++) {
+                    if ($counts[$j] > 0) {
+                        $sparse[$j] = $counts[$j];
+                    }
+                }
+                $serialized = $useIgbinary ? igbinary_serialize($sparse) : serialize($sparse);
                 file_put_contents("$tmpDir/p100m_$i.tmp", $serialized);
                 exit(0);
             }
@@ -55,16 +64,15 @@ final class Parser
 
         while (pcntl_wait($status) > 0);
 
-        // Merge: element-wise addition of flat integer arrays
-        $total = $this->numSlugs * $this->numDates;
+        // Merge: sparse addition (only non-zero entries from children)
         for ($i = 1; $i < $childCount; $i++) {
             $tmpFile = "$tmpDir/p100m_$i.tmp";
             $raw = file_get_contents($tmpFile);
             unlink($tmpFile);
-            $childCounts = $useIgbinary ? igbinary_unserialize($raw) : unserialize($raw);
+            $sparse = $useIgbinary ? igbinary_unserialize($raw) : unserialize($raw);
 
-            for ($j = 0; $j < $total; $j++) {
-                $merged[$j] += $childCounts[$j];
+            foreach ($sparse as $idx => $cnt) {
+                $merged[$idx] += $cnt;
             }
         }
 
